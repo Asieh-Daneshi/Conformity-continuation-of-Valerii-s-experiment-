@@ -1,0 +1,279 @@
+---
+title: "Data filtering and visualization"
+author: "Valerii Chirkov"
+date: '2022-09-14'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+## Fix the bug with the fonts
+# library(extrafont)
+# library(remotes)
+# remotes::install_version("Rttf2pt1", version = "1.3.8")
+# extrafont::font_import()
+
+```
+
+```{r}
+library("pacman")
+p_load(tidyverse, brms, ggExtra, bayesplot, wesanderson, hrbrthemes, pROC, ggridges)
+
+data_path = Sys.getenv("Main1_data_path")
+
+raw_data <- readRDS(file = "data/data.rds")
+
+```
+
+## Preparing data
+
+### Filter data
+
+-   Select valid subjects and trials. Note: practice and catch trials are also excluded
+-   Remove columns that are not relevant after filtering the data
+
+```{r}
+data <- raw_data %>%
+  filter(valid_trial, valid_subject) %>%
+  select(-c(valid_trial, valid_subject,
+            is_catch, is_practice, block,
+            percentage_of_orange_pixels,
+            trial_length)) %>% # remove useless columns
+  rename(subj = id)
+head(data)
+```
+
+-   **subj**: Automatically generated unique identifier of the subject. These ids are automatically generated in [Unity Experiment Framework](https://github.com/immersivecognition/unity-experiment-framework).
+-   **trial_num**: The trial number in the experiment session. Note that numbers for catch trials and practice trials are missing, so there are some gaps in the number sequence. The number is between 11 (the first main trial) and 148.
+-   **n_agents**: The number of agents raising flags in the current trial. The number is between 1 and 8.
+-   **congruency**: The fags location mapping between the subject and the group of agents. 'IC' is an incongruent mapping and 'C' is a congruent mapping.
+-   **rt**: Subject reaction time in milliseconds. Note that the whole task is presented within 3070ms but the subject can respond earlier.
+-   **group_alignment**: This variable codes subject decision. 'F' means that subject follows a group decision in the corresponding trial, and 'NF' means that the subject does not follow a group decision.
+-   **first_agent_rt**: Fastest agent reaction time. This value is generated using Normal distribution with means=200, 300, 400, or 500ms and sd=100ms
+
+### Data transformation
+
+```{r}
+
+data <- data %>%
+  mutate(
+    c_n_agents = n_agents - mean(n_agents), # center the number of agents
+    decision = ifelse(group_alignment == 'F', 1, 0) # numeric variable for the decision
+  )
+
+head(data)
+```
+
+### Setup contrasts
+
+```{r}
+
+contrasts(data$congruency) <- c(-0.5, +0.5)
+contrasts(data$congruency)
+
+```
+
+```{r}
+
+contrasts(data$group_alignment) <- c(-0.5, +0.5)
+contrasts(data$group_alignment)
+
+```
+
+### Save filtered data
+
+```{r eval=FALSE, include=FALSE}
+
+# saveRDS(data, file = paste0(data_path, "data_filtered.rds"))
+# saveRDS(data, file = paste0("data/", "data_filtered.rds"))
+
+```
+
+
+## Visualization
+
+### RT
+
+```{r}
+data |>
+  filter(rt < 5000) |>
+  ggplot(aes(x = rt, color = group_alignment)) +
+    geom_density(aes(y = after_stat(count / max(count)), linetype = congruency), 
+                 alpha = 0.5, adjust = 1) +
+  scale_colour_ipsum() + scale_fill_ipsum() +
+  theme_ipsum()
+```
+
+
+```{r}
+data |>
+  filter(rt < 5000) |>
+  ggplot(aes(x = rt, y = as.factor(n_agents), color = congruency)) +
+  geom_density_ridges(scale = 1.5, alpha = 0.1, panel_scaling = F) + # aes(y = after_stat(count / max(count))), 
+  scale_colour_ipsum() +
+  scale_fill_ipsum() +
+  facet_wrap(vars(group_alignment)) +
+  theme_ipsum()
+```
+```{r}
+data |>
+  group_by(n_agents, congruency, group_alignment) |>
+  summarise(mean = mean(rt),
+            n = n(),
+            se = sd(rt) / sqrt(n)) |>
+  ggplot(aes(y = mean, x = n_agents, fill = congruency)) +
+  geom_line(color = "grey") +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = .1,
+               position=position_dodge(0.05), color = "grey") +
+  geom_point(shape = 21, color = "black", size = 6) +
+  scale_colour_ipsum() +
+  scale_fill_ipsum() +
+  facet_grid(cols = vars(group_alignment)) +
+  labs(x = "The number of agents", y = "Reaction time (ms)",
+       title = "Reaction time",
+       fill = "Flags positions") +
+  theme_ipsum()
+```
+
+
+
+### Decision
+
+```{r}
+data |>
+  group_by(n_agents, congruency) |>
+  summarise(mean = mean(decision),
+            n = n(),
+            se = sd(decision) / sqrt(n)) |>
+  ggplot(aes(y = mean, x = n_agents, fill = congruency)) +
+  geom_abline(slope = 0, intercept = 0.5, linetype = 3, alpha = 0.6) +
+  geom_line(color = "grey") +
+  geom_errorbar(
+    aes(ymin = mean - se, ymax = mean + se), width = .1, position = position_dodge(0.05), color = "grey") +
+  geom_point(shape = 21, color = "black", size = 6) +
+  scale_colour_ipsum() +
+  scale_fill_ipsum() +
+  labs(x = "The number of agents",
+       y = "Group alignment",
+       title = "Decision",
+       fill = "Flags positions") + 
+  theme_ipsum()
+```
+```{r}
+
+data |>
+  ggplot(aes(y = decision, x = first_agent_rt)) +
+  geom_smooth(method = 'lm', label = "lm") +
+  geom_abline(slope = 0, intercept = 0.5, linetype = 3, alpha = 1, color = 'red') +
+  theme_ipsum() +
+    labs(
+      x = "The fastest agent reaction time",
+      y = "Group alignment rate",
+      title = "Decision")
+
+```
+```{r}
+
+data |>
+  ggplot(aes(y = decision, x = first_agent_rt, color = congruency)) +
+  geom_smooth(method = 'lm', label = "lm") +
+  geom_abline(slope = 0, intercept = 0.5, linetype = 3, alpha = 1, color = 'red') +
+  theme_ipsum() +
+    labs(
+      x = "The fastest agent reaction time",
+      y = "Group alignment rate",
+      title = "Decision")
+
+```
+
+
+```{r}
+
+data |>
+  ggplot(aes(y = decision, x = rt, color = congruency)) +
+  geom_smooth() +
+  xlim(NA, 5000) +
+  theme_ipsum() +
+    labs(
+      x = "Reaction Time",
+      y = "Group alignment rate",
+      title = "Decision")
+
+```
+
+```{r}
+
+data |>
+  ggplot(aes(y = decision, x = rt, color = as.factor(n_agents))) +
+  geom_smooth(se=F) +
+  xlim(NA, 5000) +
+  theme_ipsum() +
+    labs(
+      x = "Reaction Time",
+      y = "Group alignment rate",
+      color = "The number of agents",
+      title = "Decision")
+
+```
+
+```{r}
+
+data |>
+  ggplot(aes(y = decision, x = rt, color = congruency)) +
+  geom_smooth() +
+  xlim(NA, 5000) +
+  theme_ipsum() +
+    labs(
+      x = "Reaction Time",
+      y = "Group alignment rate",
+      title = "Decision") +
+  facet_wrap(vars(n_agents))
+  
+```
+
+
+```{r}
+data |>
+  ggplot(aes(y = decision, x = rt)) +
+  geom_smooth(aes(group = subj), se = F, size = 0.1, span = 0.99) +
+  geom_smooth(color = 'red') +
+  xlim(NA, 6000) +
+  # ylim(0.4, 0.7) +
+  theme_ipsum() +
+    labs(
+      x = "Reaction Time",
+      y = "Group alignment rate",
+      title = "Decision")  
+```
+
+## Trials
+
+```{r}
+
+data |>
+  ggplot(aes(y = decision, x = trial_num, color = congruency)) +
+  geom_smooth() +
+  theme_ipsum() +
+    labs(
+      x = "Trial number",
+      y = "Group alignment rate",
+      title = "Group alignment rate"
+      )
+
+```
+
+```{r}
+
+data |>
+  ggplot(aes(y = rt, x = trial_num, color = congruency)) +
+  geom_smooth() +
+  theme_ipsum() +
+    labs(
+      x = "Trial number",
+      y = "Reaction time",
+      title = "Reaction time"
+      )
+
+```
+
+

@@ -1,0 +1,274 @@
+---
+title: "Analysis (RT)"
+author: "Valerii Chirkov"
+date: '2022-09-20'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+```
+
+```{r}
+library("pacman")
+p_load(tidyverse, brms, bayesplot, wesanderson, hrbrthemes, interactions, brmstools)
+
+data <- readRDS(file = "data/data_filtered.rds")
+
+head(data)
+
+```
+
+
+## How do sensorimotor processes influence social decision-making?
+
+**Hypotheses**
+
+1. Reaction time will be shorter for:
+- congruent trials (`congruency`)
+- larger group (`c_n_agents`)
+2. Reaction time will be shorter when subjects follow group decisions (`decision`)
+
+
+### Model 1: rt ~ 1 + c_n_agents * congruency * group_alignment + (c_n_agents * congruency * decision || subj))
+
+
+```{r results='hide'}
+
+m1.formula <- brmsformula(rt ~ 1 + c_n_agents * congruency * group_alignment +
+                            (c_n_agents * congruency * group_alignment || subj))
+
+m1.priors <- c(
+  prior(normal(7.5, 1), class = Intercept),
+  prior(normal(0, .5), class = sigma),
+  prior(normal(0, 0.001), class = b),
+  prior(normal(0, 0.01), coef = "group_alignment1", class = b),
+  prior(normal(0, .1), class = sd)
+)
+
+m1.fit <- brm(
+  formula = m1.formula,
+  data = data,
+  family = lognormal(),
+  prior = m1.priors,
+  cores = 4,
+  seed = 42)
+
+```
+
+
+```{r}
+
+summary(m1.fit)
+
+```
+
+
+```{r}
+
+print(round(fixef(m1.fit), 3))
+
+```
+
+
+```{r}
+
+m1.df_fit <- as.data.frame(m1.fit)
+
+mcmc_areas(
+  m1.df_fit %>% dplyr::select(
+    c("b_c_n_agents", "b_congruency1", "b_group_alignment1", 
+      "b_c_n_agents:congruency1", "b_c_n_agents:group_alignment1",
+      "b_congruency1:group_alignment1", "b_c_n_agents:congruency1:group_alignment1")),
+  prob = 0.8, # 80% intervals
+  prob_outer = 0.99, # 99%
+  point_est = "median",
+) + ggplot2::labs(
+  title = "Posterior parameter distributions",
+  subtitle = "with medians and 80% intervals"
+)
+
+```
+
+```{r eval=FALSE}
+data_summary <- data |>
+  group_by(c_n_agents, congruency) |>
+  summarise(mean = mean(rt),
+            n = n())
+
+
+p <- interact_plot(m1.fit, pred = c_n_agents, modx = congruency,
+              mod2 = group_alignment, interval = TRUE)
+
+p +
+  scale_colour_ipsum() +
+  scale_fill_ipsum() +
+  theme_ipsum() +
+  ggplot2::labs(
+    x = "The number of agens", 
+    y = "Reaction time"
+    ) 
+# +
+#   geom_point(data = data_summary, 
+#              aes(y = mean, x = c_n_agents, color = congruency), 
+#              inherit.aes = FALSE,
+#              size = 3)
+
+```
+
+
+```{r}
+conditions = data.frame(group_alignment = c('F', 'NF'),
+                        cond__ = c('Follow', 'Not Follow'))
+
+p <- conditional_effects(m1.fit, ask = F,
+                         effects = "c_n_agents:congruency",
+                         conditions = conditions)
+plot(p, plot = FALSE)[[1]] +
+    scale_colour_ipsum() +
+  scale_fill_ipsum() +
+  theme_ipsum() +
+  labs(x = "Number of agens", y = "Reaction Time (ms)",
+       title = "Reaction time")
+
+```
+
+
+### Plot random effects
+
+```{r}
+
+m1.ranef <- data.frame(ranef(m1.fit))
+
+```
+
+
+```{r}
+
+m1.ranef %>% 
+  arrange(subj.Estimate.Intercept) %>% 
+  ggplot(aes(x = subj.Estimate.Intercept, y = rownames(.))) +
+  geom_point()
+  
+
+```
+```{r}
+
+forest(m1.fit, grouping = "subj", pars = "Intercept", text = F, density = F)
+
+```
+
+```{r}
+
+forest(m1.fit, grouping = "subj", pars = "congruency1", text = F, density = F)
+
+```
+
+
+### Plot correlations between random effects
+
+```{r}
+
+m1.ranef %>% 
+  ggplot(aes(x = subj.Estimate.Intercept, y = subj.Estimate.c_n_agents)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(
+  title = "Correlation between random effects in the rt model",
+  x = "Intercept adjustments",
+  y = "The number of agents slope adjustments"
+  
+)
+
+```
+
+```{r}
+
+m1.ranef %>% 
+  ggplot(aes(x = subj.Estimate.Intercept, y = subj.Estimate.group_alignment1)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(
+  title = "Correlation between random effects in the rt model",
+  x = "Intercept adjustments",
+  y = "Group alighnment slope adjustments"
+  
+)
+
+```
+
+
+
+```{r}
+
+m1.ranef %>% 
+  ggplot(aes(x = subj.Estimate.Intercept, y = subj.Estimate.congruency1)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(
+  title = "Correlation between random effects in the rt model",
+  x = "Intercept adjustments",
+  y = "Congruency slope adjustments"
+  
+)
+
+```
+
+## Posterior Predictive Checks
+
+
+### PSIS-LOO diagnostics 
+
+
+```{r}
+# Useful to check outlines (k > 0.7)
+plot(loo(m1.fit))
+
+```
+
+
+```{r}
+
+pp_check(m1.fit, ndraws = 100)
+
+```
+### Posterior predictive checks by congrouency
+
+```{r}
+
+ppc_dens_overlay_grouped(
+  data$rt,
+  yrep = posterior_predict(m1.fit, ndraws = 100),
+  group = data$congruency
+) +
+  xlim(NA, 8000)
+
+```
+
+### Posterior predictive checks by the number of agents
+
+```{r}
+
+ppc_dens_overlay_grouped(
+  data$rt,
+  yrep = posterior_predict(m1.fit, ndraws = 100),
+  group = data$n_agents
+) +
+  xlim(NA, 8000)
+
+```
+
+```{r}
+
+pp_check(
+  m1.fit, ndraws = 1000, type = "stat", stat = "mean")
+
+```
+
+```{r}
+
+pp_check(
+  m1.fit, ndraws = 1000, type = "stat", stat = "sd")
+
+```

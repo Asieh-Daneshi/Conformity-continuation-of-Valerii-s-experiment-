@@ -1,0 +1,290 @@
+---
+title: "Analysis (RT)"
+author: "Valerii Chirkov"
+date: '2022-09-20'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+```
+
+```{r}
+library("pacman")
+p_load(tidyverse, brms, bayesplot, wesanderson, hrbrthemes, interactions)
+
+data <- readRDS(file = "data/data_filtered.rds")
+
+head(data)
+
+```
+
+
+## How do sensorimotor processes influence social decision-making?
+
+**Hypotheses**
+
+1. Reaction time will be shorter for:
+- congruent trials (`congruency`)
+- larger group (`c_n_agents`)
+2. Reaction time will be shorter when subjects follow group decisions (`decision`)
+
+
+### Model 1: rt ~ 1 + c_n_agents * congruency * group_alignment
+
+
+```{r results='hide'}
+
+m1.formula <- brmsformula(rt ~ 1 + c_n_agents * congruency * group_alignment)
+
+m1.priors <- c(
+  prior(normal(7.5, 1), class = Intercept),
+  prior(normal(0, .5), class = sigma),
+  prior(normal(0, 0.01), class = b)
+)
+
+m1.fit <- brm(
+  formula = m1.formula,
+  data = data,
+  family = lognormal(),
+  prior = m1.priors,
+  cores = 4,
+  seed = 42)
+
+```
+
+
+```{r}
+
+summary(m1.fit)
+
+```
+
+
+```{r}
+
+print(round(fixef(m1.fit), 3))
+
+```
+
+
+```{r}
+plot(m1.fit, ask = F)
+```
+
+```{r}
+
+m1.df_fit <- as.data.frame(m1.fit)
+
+mcmc_areas(
+  m1.df_fit %>% dplyr::select(-c(lp__, lprior, b_Intercept, sigma)),
+  prob = 0.8, # 80% intervals
+  prob_outer = 0.99, # 99%
+  point_est = "median",
+) + ggplot2::labs(
+  title = "Posterior parameter distributions",
+  subtitle = "with medians and 80% intervals"
+)
+
+```
+
+```{r eval=FALSE}
+
+p <- interact_plot(m1.fit, pred = c_n_agents, modx = congruency,
+              mod2 = group_alignment, interval = TRUE)
+
+p +
+  scale_colour_ipsum() +
+  scale_fill_ipsum() +
+  theme_ipsum() +
+  ggplot2::labs(
+    x = "The number of agens", 
+    y = "Reaction time"
+    )
+
+```
+
+
+
+## Posterior Predictive Checks
+
+
+### PSIS-LOO diagnostics 
+
+
+```{r}
+# Useful to check outlines (k > 0.7)
+plot(loo(m1.fit))
+
+```
+
+
+```{r}
+
+pp_check(m1.fit, ndraws = 100)
+
+```
+### Posterior predictive checks by congrouency
+
+```{r}
+
+ppc_dens_overlay_grouped(
+  data$rt,
+  yrep = posterior_predict(m1.fit, ndraws = 100),
+  group = data$congruency
+) +
+  xlim(NA, 8000)
+
+```
+
+### Posterior predictive checks by the number of agents
+
+```{r}
+
+ppc_dens_overlay_grouped(
+  data$rt,
+  yrep = posterior_predict(m1.fit, ndraws = 100),
+  group = data$n_agents
+) +
+  xlim(NA, 8000)
+
+```
+
+```{r}
+
+pp_check(
+  m1.fit, ndraws = 1000, type = "stat", stat = "mean")
+
+```
+
+```{r}
+
+pp_check(
+  m1.fit, ndraws = 1000, type = "stat", stat = "sd")
+
+```
+
+```{r eval=FALSE, include=FALSE}
+# TODO: select some subjects
+# pp_check(m1.fit,
+#   type = "stat_grouped",
+#   ndraws = 1000,
+#   group = "subj",
+#   stat = "mean"
+# )
+
+```
+
+
+## Sensitivity analysis for BF
+
+```{r, eval=FALSE, include=FALSE}
+
+get_prior(m1.formula, data)
+
+# get_prior(decision ~ 1 + c_n_agents*congruency*group_alignment, data)
+# get_prior(decision ~ 1 + congruency + c_n_agents*congruency:group_alignment, data)
+
+```
+
+
+### BF and sensitivity analysis
+
+```{r}
+
+BF <- data.frame(b_sd = NA, int_sd = NA, no_n_agents = NA, no_congruency = NA, no_interaction = NA)
+
+n <- 1
+
+int_sd <- c(1)
+b_sd <- c(0.1, 0.01, 0.001)
+
+for (i in 1:length(int_sd)) {
+  for (j in 1:length(b_sd)) {
+
+priors <- c(
+  set_prior(paste0("normal(7.5, ", int_sd[i], ")"), class = "Intercept"),
+  set_prior(paste0("normal(0, ", b_sd[j], ")"), class = "b"),
+  prior(normal(0, .5), class = sigma)
+)
+
+# no c_n_agents
+m0.1.fit <- brm(
+  formula = rt ~ 1 + congruency + c_n_agents:congruency*group_alignment, prior = priors,
+  data = data, family = lognormal(), warmup = 2000, iter = 10000,
+  cores = 4, save_pars = save_pars(all = TRUE), seed = 42)
+
+m0.1.bridge_sampler <- bridge_sampler(m0.1.fit, silent = TRUE)
+
+# no congruency
+m0.2.fit <- brm(
+  formula = rt ~ 1 + c_n_agents + c_n_agents:congruency*group_alignment, prior = priors,
+  data = data, family = lognormal(), warmup = 2000, iter = 10000,
+  cores = 4, save_pars = save_pars(all = TRUE), seed = 42)
+
+m0.2.bridge_sampler <- bridge_sampler(m0.2.fit, silent = TRUE)
+
+m0.3.fit <- brm(
+  formula = rt ~ 1 + congruency + c_n_agents*congruency:group_alignment, prior = priors,
+  data = data, family = lognormal(), warmup = 2000, iter = 10000,
+  cores = 4, save_pars = save_pars(all = TRUE), seed = 42)
+
+m0.3.bridge_sampler <- bridge_sampler(m0.3.fit, silent = TRUE)
+
+
+m1.fit <- brm(
+  formula = rt ~ 1 + c_n_agents * congruency * group_alignment, prior = priors,
+  data = data, family = lognormal(), warmup = 2000, iter = 10000,
+  cores = 4, save_pars = save_pars(all = TRUE), seed = 42)
+
+m1.bridge_sampler <- bridge_sampler(m1.fit, silent = TRUE)
+
+
+BF[n, "b_sd"] <- b_sd[j]
+BF[n, "int_sd"] <- int_sd[i]
+BF[n, "no_n_agents"] <- bayes_factor(m1.bridge_sampler, m0.1.bridge_sampler)$bf
+BF[n, "no_congruency"] <- bayes_factor(m1.bridge_sampler, m0.2.bridge_sampler)$bf
+BF[n, "no_group_alignment"] <- bayes_factor(m1.bridge_sampler, m0.3.bridge_sampler)$bf
+
+print(round(fixef(m1.fit), 3))
+
+m1.df_fit <- as.data.frame(m1.fit)
+
+p <- mcmc_areas(
+  m1.df_fit %>% dplyr::select(-c(lp__, lprior, b_Intercept, sigma)),
+  prob = 0.8, # 80% intervals
+  prob_outer = 0.99, # 99%
+  point_est = "median",
+) + ggplot2::labs(
+  title = "Posterior parameter distributions",
+  subtitle = "with medians and 80% intervals"
+)
+
+plot(p)
+
+n = n + 1
+  }
+}
+```
+
+
+```{r echo=FALSE}
+
+BF %>% 
+  pivot_longer(names_to = "model", values_to = "bf", 
+               cols = c("no_n_agents", "no_congruency", "no_group_alignment")) %>%
+  ggplot(aes(color = model, y = log(bf), x = as.factor(b_sd))) +
+    geom_line(color = 'gray') +
+    geom_point(size = 4, alpha  = 0.6) +
+    theme_bw() +
+    facet_wrap(vars(model))
+
+```
+
+
+```{r}
+print(BF)
+```
+
+

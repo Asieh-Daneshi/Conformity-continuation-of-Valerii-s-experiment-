@@ -1,0 +1,282 @@
+---
+title: "Analysis (Bayes)"
+author: "Valerii Chirkov"
+date: '2022-08-18'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+library("pacman")
+p_load(tidyverse, brms, ggExtra, bayesplot, wesanderson, hrbrthemes, pROC)
+
+raw_data <- readRDS(file = paste0(getwd(), "/MainStudy1/data/", "data.rds"))
+
+```
+
+## Preparing data
+
+### Filter data
+
+-   Select valid subjects and trials. Note: practice and catch trials are also excluded
+-   Remove columns that are not relevant after filtering the data
+
+```{r}
+data <- raw_data %>% 
+  filter(valid_trial, valid_subject) %>%
+  select(-c(valid_trial, valid_subject,
+            is_catch, is_practice, block,
+            percentage_of_orange_pixels,
+            trial_length)) %>% # remove useless columns
+  rename(subj = id)
+head(data)
+```
+
+-   **subj**: Automatically generated unique identifier of the subject. These ids are automatically generated in [Unity Experiment Framework](https://github.com/immersivecognition/unity-experiment-framework).
+-   **trial_num**: The trial number in the experiment session. Note that numbers for catch trials and practice trials are missing, so there are some gaps in the number sequence. The number is between 11 (the first main trial) and 148.
+-   **n_agents**: The number of agents raising flags in the the current trial. The number is between 1 and 8.
+-   **congruency**: The fags location mapping between the subject and the group of agents. 'IC' is an incongruent mapping and 'C' is a congruent mapping.
+-   **rt**: Subject reaction time in milliseconds. Note that the whole task is presented within 3070ms but the subject can respond earlier.
+-   **group_alignment**: This variable codes subject decision. 'F' means that subject follows a group decision in the corresponding trial, and 'NF' means that the subject does not follow a group decision.
+-   **first_agent_rt**: Fastest agent reaction time. This value is generated using Normal distribution with means=200, 300, 400, or 500ms and sd=100ms
+
+### Data transformation
+
+```{r}
+
+data <- data %>% 
+  mutate(
+    c_n_agents = n_agents - mean(n_agents), # center the number of agents
+    decision = ifelse(group_alignment == 'F', 1, 0) # numeric variable for the decision
+  )
+
+head(data)
+```
+
+### Setup contrasts
+
+```{r}
+
+contrasts(data$congruency) <- c(-0.5, +0.5)
+contrasts(data$congruency)
+
+```
+
+```{r}
+
+contrasts(data$group_alignment) <- c(-0.5, +0.5)
+contrasts(data$group_alignment)
+
+```
+
+## Modelling Reaction Time
+
+### Model 1 (full model)
+
+#### Prior predictive checks
+
+```{r, results='hide'}
+
+rt_m.m1.formula <- brmsformula(
+  rt ~ 1 + c_n_agents * congruency * group_alignment + 
+    (c_n_agents + congruency + group_alignment || subj)) 
+# remove correlations for faster fit
+
+rt_m.m1.priors <- c(
+  prior(normal(7.6, 0.5), class = Intercept), # exp(7.6) = 1998.196
+  prior(normal(0, .01), class = b), # NB: sensitivity analysis
+  prior(normal(0, 0.5), class = sigma),
+  prior(normal(0, 0.1), class = sd) # , prior(lkj(2), class = cor)
+)
+
+rt_m.m1.priors_fit <- brm(
+  formula = rt_m.m1.formula,
+  data = data,
+  family = lognormal(),
+  prior = rt_m.m1.priors,
+  cores = 4,
+  seed = 42,
+  sample_prior = "only")
+
+```
+
+```{r include=FALSE}
+pp_check(rt_m.m1.priors_fit, ndraws = 100)  +
+   coord_cartesian(xlim = c(0, 12500)) 
+```
+
+```{r include=FALSE}
+
+pp_check(rt_m.m1.priors_fit, ndraws = 1000, type = "stat", stat = "mean")
+
+```
+
+```{r include=FALSE}
+# collapse all means > 2000
+mean_8000 <- function(x) {
+  tmp <- mean(x)
+  tmp[tmp > 8000] <- 8000
+  tmp
+}
+
+pp_check(rt_m.m1.priors_fit, ndraws = 1000, type = "stat", stat = "mean_8000")
+
+```
+
+#### Posterior predictive checks
+
+```{r, results='hide'}
+
+rt_m.m1.fit <- brm(
+  formula = rt_m.m1.formula,
+  data = data,
+  family = lognormal(),
+  prior = rt_m.m1.priors,
+  cores = 4,
+  # iter = 20000,
+  seed = 42,
+  save_pars = save_pars(all = TRUE)  # necessary to estimate Bayes factor
+  )
+
+```
+
+```{r}
+summary(rt_m.m1.fit)
+```
+
+```{r}
+
+plot(rt_m.m1.fit, ask = F)
+
+```
+
+```{r include=FALSE}
+
+pp_check(rt_m.m1.fit, ndraws = 100)
+
+```
+
+```{r include=FALSE}
+
+pp_check(rt_m.m1.fit, ndraws = 100, type = "stat", stat = "mean")
+
+```
+
+#### Plot estimates
+
+```{r include=FALSE}
+names(as.data.frame(rt_m.m1.fit))
+```
+
+```{r include=FALSE}
+rt_m.m1.df_fit <- as.data.frame(rt_m.m1.fit) %>%
+  rename(
+    n_agents = `b_c_n_agents`,
+    intercept = `b_Intercept`,
+    congruency = `b_congruency1`,
+    group_alignment = `b_group_alignment1`,
+    n_agents_congruency = `b_c_n_agents:congruency1`,
+    n_agents_alignment = `b_c_n_agents:group_alignment1`,
+    congruency_alignment = `b_congruency1:group_alignment1`,
+    n_agents_congruency_alignment = `b_c_n_agents:congruency1:group_alignment1`
+    
+  )
+head(rt_m.m1.df_fit)
+```
+
+```{r}
+
+mcmc_intervals(
+  rt_m.m1.df_fit, 
+  pars = c("n_agents", "group_alignment", "congruency", "n_agents_congruency", 
+           "n_agents_alignment", "congruency_alignment", 
+           "n_agents_congruency_alignment"),
+  prob = 0.8, # 80% intervals
+  prob_outer = 0.95, # 99%
+  point_est = "mean"
+)
+
+```
+
+```{r eval=FALSE}
+conditions = data.frame(group_alignment = c('F', 'NF'),
+                        cond__ = c('Not Follow', 'Follow'))
+# conditions <- make_conditions(rt_m.m1.fit, "group_alignment")
+
+p <- conditional_effects(rt_m.m1.fit, ask = F,
+                         effects = "c_n_agents:congruency",
+                         conditions = conditions)
+plot(p, plot = FALSE)[[1]] +
+  theme_ipsum() +
+  labs(x = "Number of agens", y = "Reaction Time (ms)",
+       title = "Reaction time")
+
+```
+
+## Modelling Conformity
+
+### Model 1: Logistic Regression
+
+```{r, results='hide'}
+
+conf_m.m1.priors <- c(
+  prior(normal(0, 1.5), class = Intercept),
+  prior(normal(0, 0.1), class = b),
+  prior(normal(0, 1), class = sd)
+  #, prior(lkj(2), class = cor)
+  
+)
+
+conf_m.m1.formula <- brmsformula(
+  decision ~ 1 + c_n_agents * congruency + (c_n_agents * congruency || subj))
+
+conf_m.m1.fit <- brm(
+  formula = conf_m.m1.formula,
+  data = data,
+  family = bernoulli(link = "logit"),
+  prior = conf_m.m1.priors,
+  cores = 4,
+  seed = 42)
+
+
+```
+
+```{r}
+
+summary(conf_m.m1.fit)
+
+```
+
+```{r}
+conf_m.m1.df_fit <- as.data.frame(conf_m.m1.fit) %>%
+  rename(
+    n_agents = `b_c_n_agents`,
+    intercept = `b_Intercept`,
+    congruency = `b_congruency1`,
+    n_agents_congruency = `b_c_n_agents:congruency1`
+  )
+
+mcmc_areas(
+  conf_m.m1.df_fit, 
+  pars = c("n_agents", "congruency", "n_agents_congruency"),
+  prob = 0.8, # 80% intervals
+  prob_outer = 0.95, # 99%
+  point_est = "mean"
+)
+
+```
+
+
+```{r eval=FALSE}
+
+p <- conditional_effects(conf_m.m1.fit, ask = F,
+                         effects = "c_n_agents:congruency")
+plot(p, plot = FALSE)[[1]] +
+  theme_ipsum() +
+  labs(x = "Number of agens", y = "Group allignment",
+       title = "Conformity")
+
+```
