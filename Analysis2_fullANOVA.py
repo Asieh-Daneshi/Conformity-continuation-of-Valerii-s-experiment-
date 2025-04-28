@@ -54,6 +54,8 @@ ConformityArray[:,0] = congruency[:,0]
 ConformityArray[:,1] = num_agents[:,0]
 ConformityArray[:,2] = FollowPercentageLong[:,0]
 df_Conformity = pd.DataFrame(ConformityArray, columns=['congruency','num_agents','follow_percentage'])
+df_Conformity['num_agents'] = df_Conformity['num_agents'].astype('category')
+df_Conformity['congruency'] = df_Conformity['congruency'].astype('category')
 # Two-way ANOVA for conformity
 model_conformity = ols('follow_percentage ~ C(congruency) * C(num_agents)', data=df_Conformity).fit()
 anova_table_conformity = sm.stats.anova_lm(model_conformity, typ=2)
