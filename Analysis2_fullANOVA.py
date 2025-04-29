@@ -9,6 +9,8 @@ import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from scipy import stats
 from scipy.stats import chi2_contingency
+from statsmodels.stats.multicomp import pairwise_tukeyhsd, MultiComparison
+import matplotlib.pyplot as plt
 # =============================================================================
 df = pd.read_csv('data.csv')  
 
@@ -66,10 +68,48 @@ print(anova_table_conformity)
 # Because group_alignment is categorical (F/NF), we'll use Chi2, but logistic is better.
 df_test['group_alignment_binary'] = (df["group_alignment"] == "F").astype(bool) 
 
-
 table = pd.crosstab(df_test['congruency'], df_test['group_alignment_binary'])
 chi2, p, dof, expected = chi2_contingency(table)
 print(f"Chi² = {chi2:.2f}, p = {p:.4f}")
+
+# posthoc for conformity
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+
+# Post-hoc for number of agents (ignoring congruency for simplicity)
+tukey = pairwise_tukeyhsd(endog=df_Conformity['follow_percentage'],
+                          groups=df_Conformity['num_agents'],
+                          alpha=0.05)
+
+
+# Split by congruency
+df_C = df_Conformity[df_Conformity['congruency'] == 1]
+df_IC = df_Conformity[df_Conformity['congruency'] == 0]
+
+# Post-hoc for congruent trials
+tukey_C = pairwise_tukeyhsd(endog=df_C['follow_percentage'],
+                            groups=df_C['num_agents'],
+                            alpha=0.05)
+
+print("\nTukey HSD post-hoc (congruent trials):")
+print(tukey_C.summary())
+
+# Post-hoc for incongruent trials
+tukey_IC = pairwise_tukeyhsd(endog=df_IC['follow_percentage'],
+                             groups=df_IC['num_agents'],
+                             alpha=0.05)
+
+print("\nTukey HSD post-hoc (incongruent trials):")
+print(tukey_IC.summary())
+
+# Plot
+fig = tukey.plot_simultaneous(ylabel="Num Agents", xlabel="Follow Percentage")
+plt.title("Tukey HSD - Follow Percentage by Number of Agents")
+plt.grid(True)
+plt.show()
+# -----------------------------------------------------------------------------
+
+print("\nTukey HSD post-hoc test for number of agents:")
+print(tukey.summary())
 
 # Two-way ANOVA for RT
 model_rt = ols('rt ~ C(n_agents) * C(congruency)', data=df_test).fit()
@@ -77,6 +117,22 @@ anova_table_rt = sm.stats.anova_lm(model_rt, typ=2)
 print("\nTwo-way ANOVA for Response Time (RT):")
 print(anova_table_rt)
 
+
+# posthoc for RT
+# Tukey post-hoc test for RT across all agent numbers
+tukey_rt = pairwise_tukeyhsd(endog=df_test['rt'],
+                             groups=df_test['n_agents'],
+                             alpha=0.05)
+
+print("\nTukey HSD post-hoc test for RT (all trials):")
+print(tukey_rt.summary())
+
+# Plot
+fig = tukey_rt.plot_simultaneous(ylabel="Num Agents", xlabel="RT (ms)")
+plt.title("Tukey HSD - RT by Number of Agents")
+plt.grid(True)
+plt.show()
+# -----------------------------------------------------------------------------
 df_test_congruent=df_test[df_test['congruency']=='C']
 df_test_incongruent=df_test[df_test['congruency']=='IC']
 
