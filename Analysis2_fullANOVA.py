@@ -61,11 +61,6 @@ model_conformity = ols('follow_percentage ~ C(congruency) * C(num_agents)', data
 anova_table_conformity = sm.stats.anova_lm(model_conformity, typ=2)
 print("\nTwo-way ANOVA for conformity:")
 print(anova_table_conformity)
-# Two-way ANOVA for RT
-model_rt = ols('rt ~ C(n_agents) * C(congruency)', data=df_test).fit()
-anova_table_rt = sm.stats.anova_lm(model_rt, typ=2)
-print("\nTwo-way ANOVA for Response Time (RT):")
-print(anova_table_rt)
 
 # Chi2 test for Group Alignment
 # Because group_alignment is categorical (F/NF), we'll use Chi2, but logistic is better.
@@ -75,3 +70,23 @@ df_test['group_alignment_binary'] = (df["group_alignment"] == "F").astype(bool)
 table = pd.crosstab(df_test['congruency'], df_test['group_alignment_binary'])
 chi2, p, dof, expected = chi2_contingency(table)
 print(f"Chi² = {chi2:.2f}, p = {p:.4f}")
+
+# Two-way ANOVA for RT
+model_rt = ols('rt ~ C(n_agents) * C(congruency)', data=df_test).fit()
+anova_table_rt = sm.stats.anova_lm(model_rt, typ=2)
+print("\nTwo-way ANOVA for Response Time (RT):")
+print(anova_table_rt)
+
+df_test_congruent=df_test[df_test['congruency']=='C']
+df_test_incongruent=df_test[df_test['congruency']=='IC']
+
+# One-way ANOVA for RT (for congruent and incongruent separately)
+model_rt_C = ols('rt ~ C(n_agents)', data=df_test_congruent).fit()
+anova_table_rt_C = sm.stats.anova_lm(model_rt_C, typ=1)
+print("\nOne-way ANOVA for Response Time (RT) for congruent trials:")
+print(anova_table_rt_C)
+
+model_rt_IC = ols('rt ~ C(n_agents)', data=df_test_incongruent).fit()
+anova_table_rt_IC = sm.stats.anova_lm(model_rt_IC, typ=1)
+print("\nOne-way ANOVA for Response Time (RT) for incongruent trials:")
+print(anova_table_rt_IC)
